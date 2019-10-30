@@ -207,6 +207,7 @@ public class KubernetesBackend extends AbstractContainerBackend {
 				.withNewMetadata()
 					.withName("sp-pod-" + container.getId())
 					.addToLabels("app", container.getId())
+					.addToLabels("type", "sp-pod")
 					.endMetadata();
 		
 		PodSpec podSpec = new PodSpec();
@@ -228,7 +229,32 @@ public class KubernetesBackend extends AbstractContainerBackend {
 		
 		Service service = null;
 		if (isUseInternalNetwork()) {
-			// If SP runs inside the cluster, it can access pods directly and doesn't need any port publishing service.
+			
+			if(!isOnIstio()){
+				// If SP runs inside the cluster without istio injection enabled, it can access pods directly and doesn't need any port publishing service.
+			} else {
+				// Istio requires 
+				List<ServicePort> servicePorts = spec.getPortMapping().values().stream()
+					.map(p -> new ServicePortBuilder().withPort(p).build())
+					.collect(Collectors.toList());
+			
+				Service startupService = kubeClient.services().inNamespace(kubeNamespace).createNew()
+						.withApiVersion(apiVersion)
+						.withKind("Service")
+						.withNewMetadata()
+							.withName("sp-service-" + container.getId())
+							.endMetadata()
+						.withNewSpec()
+							.addToSelector("app", container.getId())
+							.withType("ClusterIP")
+							.withPorts(servicePorts)
+							.endSpec()
+						.done();
+				
+				// Workaround: waitUntilReady appears to be buggy.
+				Retrying.retry(i -> Readiness.isReady(kubeClient.resource(startupService).fromServer().get()), 60, 1000);
+				service = kubeClient.resource(startupService).fromServer().get();
+			}
 		} else {
 			List<ServicePort> servicePorts = spec.getPortMapping().values().stream()
 					.map(p -> new ServicePortBuilder().withPort(p).build())
@@ -260,10 +286,15 @@ public class KubernetesBackend extends AbstractContainerBackend {
 			int containerPort = spec.getPortMapping().get(mappingKey);
 			
 			int servicePort = -1;
-			if (service != null) servicePort = service.getSpec().getPorts().stream()
+			if (service != null) {
+				if (!isOnIstio()) {
+					servicePort = service.getSpec().getPorts().stream()
 					.filter(p -> p.getPort() == containerPort).map(p -> p.getNodePort())
 					.findAny().orElse(-1);
-			
+				} else {
+					servicePort = containerPort;
+				}
+			}
 			String mapping = mappingStrategy.createMapping(mappingKey, container, proxy);
 			URI target = calculateTarget(container, containerPort, servicePort);
 			proxy.getTargets().put(mapping, target);
@@ -273,14 +304,20 @@ public class KubernetesBackend extends AbstractContainerBackend {
 	}
 
 	protected URI calculateTarget(Container container, int containerPort, int servicePort) throws Exception {
+		String kubeNamespace = getProperty(PROPERTY_NAMESPACE, DEFAULT_NAMESPACE);
 		String targetProtocol = getProperty(PROPERTY_CONTAINER_PROTOCOL, DEFAULT_TARGET_PROTOCOL);
 		String targetHostName;
 		int targetPort;
 		
 		Pod pod = Pod.class.cast(container.getParameters().get(PARAM_POD));
+		Service service = Service.class.cast(container.getParameters().get(PARAM_SERVICE));
 		
 		if (isUseInternalNetwork()) {
-			targetHostName = pod.getStatus().getPodIP();
+			if (!isOnIstio()) {
+				targetHostName = pod.getStatus().getPodIP();
+			} else {
+            targetHostName = String.format("%s.%s.svc.cluster.local", "sp-service-" + container.getId(), kubeNamespace);
+			}
 			targetPort = containerPort;
 		} else {
 			targetHostName = pod.getStatus().getHostIP();
