@@ -207,6 +207,7 @@ public class KubernetesBackend extends AbstractContainerBackend {
 				.withNewMetadata()
 					.withName("sp-pod-" + container.getId())
 					.addToLabels("app", container.getId())
+					// A fixed label makes networking & permissions much easier within istio. Perhaps adding 'sp-pod-[appName]' would be useful. or custom labels.
 					.addToLabels("type", "sp-pod")
 					.endMetadata();
 		
@@ -230,10 +231,10 @@ public class KubernetesBackend extends AbstractContainerBackend {
 		Service service = null;
 		if (isUseInternalNetwork()) {
 			
-			if(!isOnIstio()){
+			if(!isUseFQDNAddressing()){
 				// If SP runs inside the cluster without istio injection enabled, it can access pods directly and doesn't need any port publishing service.
 			} else {
-				// Istio requires 
+				// Istio requires a service and fully-qualified domain names.
 				List<ServicePort> servicePorts = spec.getPortMapping().values().stream()
 					.map(p -> new ServicePortBuilder().withPort(p).build())
 					.collect(Collectors.toList());
@@ -287,7 +288,7 @@ public class KubernetesBackend extends AbstractContainerBackend {
 			
 			int servicePort = -1;
 			if (service != null) {
-				if (!isOnIstio()) {
+				if (!isUseFQDNAddressing()) {
 					servicePort = service.getSpec().getPorts().stream()
 					.filter(p -> p.getPort() == containerPort).map(p -> p.getNodePort())
 					.findAny().orElse(-1);
@@ -313,7 +314,7 @@ public class KubernetesBackend extends AbstractContainerBackend {
 		Service service = Service.class.cast(container.getParameters().get(PARAM_SERVICE));
 		
 		if (isUseInternalNetwork()) {
-			if (!isOnIstio()) {
+			if (!isUseFQDNAddressing()) {
 				targetHostName = pod.getStatus().getPodIP();
 			} else {
             targetHostName = String.format("%s.%s.svc.cluster.local", "sp-service-" + container.getId(), kubeNamespace);

@@ -62,7 +62,7 @@ public abstract class AbstractContainerBackend implements IContainerBackend {
 	protected static final String PROPERTY_CERT_PATH = "cert-path";
 	protected static final String PROPERTY_CONTAINER_PROTOCOL = "container-protocol";
 	protected static final String PROPERTY_PRIVILEGED = "privileged";
-	protected static final String PROPERTY_ISTIO = "istio";
+	protected static final String PROPERTY_FQDN_ADDRESSING = "fqdn-addressing";
 	
 	protected static final String DEFAULT_TARGET_PROTOCOL = "http";
 	
@@ -74,7 +74,7 @@ public abstract class AbstractContainerBackend implements IContainerBackend {
 	
 	private boolean useInternalNetwork;
 	private boolean privileged;
-	private boolean onIstio;
+	private boolean useFQDNAddressing;
 	
 	@Inject
 	protected IProxyTargetMappingStrategy mappingStrategy;
@@ -101,7 +101,7 @@ public abstract class AbstractContainerBackend implements IContainerBackend {
 		// If this application runs as a container itself, things like port publishing can be omitted.
 		useInternalNetwork = Boolean.valueOf(getProperty(PROPERTY_INTERNAL_NETWORKING, "false"));
 		privileged = Boolean.valueOf(getProperty(PROPERTY_PRIVILEGED, "false"));
-		onIstio = Boolean.valueOf(getProperty(PROPERTY_ISTIO, "false"));
+		useFQDNAddressing = Boolean.valueOf(getProperty(PROPERTY_FQDN_ADDRESSING, "false"));
 	}
 	
 	@Override
@@ -223,7 +223,7 @@ public abstract class AbstractContainerBackend implements IContainerBackend {
 		return privileged;
 	}
 
-	protected boolean isOnIstio() {
-		return onIstio;
+	protected boolean isUseFQDNAddressing() {
+		return useFQDNAddressing;
 	}
 }
