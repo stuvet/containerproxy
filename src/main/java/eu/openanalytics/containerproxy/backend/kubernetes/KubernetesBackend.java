@@ -32,6 +32,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.TimeUnit;
 import java.util.function.BiConsumer;
 import java.util.stream.Collectors;
 
@@ -208,9 +209,15 @@ public class KubernetesBackend extends AbstractContainerBackend {
 					.withName("sp-pod-" + container.getId())
 					.addToLabels("app", container.getId())
 					// A fixed label makes networking & permissions much easier within istio. Perhaps adding 'sp-pod-[appName]' would be useful. or custom labels.
-					.addToLabels("type", "sp-pod")
+					.addToLabels("objtype", "sp-pod")
+					// Pods need annotations to allow an http readiness probe to succeed when mTLS is enabled.
+					// TODO: Does this break non-istio installs?
+					//.addToAnnotations("sidecar.istio.io/rewriteAppHTTPProbers", "true")
+					//Prevent Istio Injection
+					//Will not work if mTLS is set to STRICT on the namespace
+					.addToAnnotations("sidecar.istio.io/inject", "false")
 					.endMetadata();
-		
+			
 		PodSpec podSpec = new PodSpec();
 		podSpec.setContainers(Collections.singletonList(containerBuilder.build()));
 		podSpec.setVolumes(volumes);
@@ -224,19 +231,20 @@ public class KubernetesBackend extends AbstractContainerBackend {
 		
 		Pod startupPod = doneablePod.withSpec(podSpec).done();
 		
-		// Workaround: waitUntilReady appears to be buggy.
+		log.info("Waiting for pod");
 		Retrying.retry(i -> Readiness.isReady(kubeClient.resource(startupPod).fromServer().get()), 60, 1000);
 		Pod pod = kubeClient.resource(startupPod).fromServer().get();
-		
+		log.info("Finished waiting for pod");
 		Service service = null;
 		if (isUseInternalNetwork()) {
-			
+        
 			if(!isUseFQDNAddressing()){
 				// If SP runs inside the cluster without istio injection enabled, it can access pods directly and doesn't need any port publishing service.
+					// Workaround: waitUntilReady appears to be buggy
 			} else {
 				// Istio requires a service and fully-qualified domain names.
 				List<ServicePort> servicePorts = spec.getPortMapping().values().stream()
-					.map(p -> new ServicePortBuilder().withPort(p).build())
+					.map(p -> new ServicePortBuilder().withPort(p).withName("port-" + p).build())
 					.collect(Collectors.toList());
 			
 				Service startupService = kubeClient.services().inNamespace(kubeNamespace).createNew()
@@ -244,6 +252,8 @@ public class KubernetesBackend extends AbstractContainerBackend {
 						.withKind("Service")
 						.withNewMetadata()
 							.withName("sp-service-" + container.getId())
+							.addToLabels("objtype", "sp-service")
+							.addToLabels("app", container.getId())
 							.endMetadata()
 						.withNewSpec()
 							.addToSelector("app", container.getId())
@@ -251,12 +261,32 @@ public class KubernetesBackend extends AbstractContainerBackend {
 							.withPorts(servicePorts)
 							.endSpec()
 						.done();
+				// Throwing an exception - Line 79 Readiness.class = Service not a valid type.
+				// Workaround: waitUntilReady appears to be buggy.
+				
+				//service = kubeClient.resource(startupService).get();//.waitUntilReady(30, TimeUnit.SECONDS);
+				log.info(kubeNamespace);
+				
+					
+				log.info("Waiting for service");
+
+				
+				service = kubeClient.resource(startupService).waitUntilReady(30, TimeUnit.SECONDS);
+				//service = kubeClient.services().inNamespace(kubeNamespace).withName("sp-service-" + container.getId()).get();
+				//log.info("Found Service:", service.getSpec().toString());
+				log.info("Found Service");
+				//kubeClient.resource(startupPod).inNamespace(kubeNamespace).waitUntilReady(30, TimeUnit.SECONDS);
+				//pod = kubeClient.pods().inNamespace(kubeNamespace).withName(startupPod.getMetadata().getName()).fromServer().get();
+				//pod = kubeClient.pods().inNamespace(kubeNamespace).withName("sp-pod-" + container.getId()).waitUntilReady(30, TimeUnit.SECONDS);
+				//pod = kubeClient.pods().inNamespace(kubeNamespace).withName("sp-pod-" + container.getId()).get();
 				
 				// Workaround: waitUntilReady appears to be buggy.
-				Retrying.retry(i -> Readiness.isReady(kubeClient.resource(startupService).fromServer().get()), 60, 1000);
-				service = kubeClient.resource(startupService).fromServer().get();
+				log.info("Past waiting");
 			}
+			
+		
 		} else {
+			
 			List<ServicePort> servicePorts = spec.getPortMapping().values().stream()
 					.map(p -> new ServicePortBuilder().withPort(p).build())
 					.collect(Collectors.toList());
@@ -273,10 +303,13 @@ public class KubernetesBackend extends AbstractContainerBackend {
 						.withPorts(servicePorts)
 						.endSpec()
 					.done();
-			
+
+			//TODO: does this really work? Looks like it should throw an exception on line 79 of Readiness.class
 			// Workaround: waitUntilReady appears to be buggy.
-			Retrying.retry(i -> Readiness.isReady(kubeClient.resource(startupService).fromServer().get()), 60, 1000);
-			service = kubeClient.resource(startupService).fromServer().get();
+			//Retrying.retry(i -> Readiness.isReady(kubeClient.resource(startupService).fromServer().get()), 60, 1000);
+			service = kubeClient.services().inNamespace(kubeNamespace).withName("sp-service-" + container.getId()).waitUntilReady(30, TimeUnit.SECONDS);
+			pod = kubeClient.pods().inNamespace(kubeNamespace).withName("sp-pod-" + container.getId()).waitUntilReady(30, TimeUnit.SECONDS);
+
 		}
 		
 		container.getParameters().put(PARAM_POD, pod);
@@ -311,7 +344,6 @@ public class KubernetesBackend extends AbstractContainerBackend {
 		int targetPort;
 		
 		Pod pod = Pod.class.cast(container.getParameters().get(PARAM_POD));
-		Service service = Service.class.cast(container.getParameters().get(PARAM_SERVICE));
 		
 		if (isUseInternalNetwork()) {
 			if (!isUseFQDNAddressing()) {
@@ -330,9 +362,16 @@ public class KubernetesBackend extends AbstractContainerBackend {
 	
 	@Override
 	protected void doStopProxy(Proxy proxy) throws Exception {
+		String kubeNamespace = getProperty(PROPERTY_NAMESPACE, DEFAULT_NAMESPACE);
 		for (Container container: proxy.getContainers()) {
-			Pod pod = Pod.class.cast(container.getParameters().get(PARAM_POD));
-			if (pod != null) kubeClient.pods().delete(pod);
+			//if(!isUseFQDNAddressing()){
+				Pod pod = Pod.class.cast(container.getParameters().get(PARAM_POD));
+				if (pod != null) kubeClient.pods().inNamespace(kubeNamespace).delete(pod);
+			//} else {
+
+			//}
+			
+			
 			Service service = Service.class.cast(container.getParameters().get(PARAM_SERVICE));
 			if (service != null) kubeClient.services().delete(service);
 		}
