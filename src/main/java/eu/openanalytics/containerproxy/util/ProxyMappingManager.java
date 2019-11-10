@@ -131,7 +131,7 @@ public class ProxyMappingManager {
 		String queryString = request.getQueryString();
 		queryString = (queryString == null) ? "" : "?" + queryString;
 		String targetPath = PROXY_INTERNAL_ENDPOINT + "/" + mapping + queryString;
-		
+
 		request.startAsync();
 		request.getRequestDispatcher(targetPath).forward(request, response);
 	}

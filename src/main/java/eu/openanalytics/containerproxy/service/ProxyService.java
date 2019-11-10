@@ -42,6 +42,7 @@ import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 
 import eu.openanalytics.containerproxy.ContainerProxyException;
+import eu.openanalytics.containerproxy.backend.AbstractContainerBackend;
 import eu.openanalytics.containerproxy.backend.IContainerBackend;
 import eu.openanalytics.containerproxy.model.runtime.Proxy;
 import eu.openanalytics.containerproxy.model.runtime.ProxyStatus;
@@ -212,10 +213,15 @@ public class ProxyService {
 		try {
 			backend.startProxy(proxy);
 		} finally {
+			log.info("Proxy Status: " + proxy.getStatus().toString());
 			if (proxy.getStatus() != ProxyStatus.Up) activeProxies.remove(proxy);
 		}
 		
 		for (Entry<String, URI> target: proxy.getTargets().entrySet()) {
+			log.info("Mapping ProxyID: " + proxy.getId());
+			log.info("Spec: " + proxy.getSpec().toString());
+			log.info("Mapping Key: " + target.getKey());
+			log.info("Mapping Value: " + target.getValue().toString());
 			mappingManager.addMapping(proxy.getId(), target.getKey(), target.getValue());
 		}
 

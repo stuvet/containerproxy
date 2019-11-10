@@ -215,7 +215,8 @@ public class KubernetesBackend extends AbstractContainerBackend {
 					//.addToAnnotations("sidecar.istio.io/rewriteAppHTTPProbers", "true")
 					//Prevent Istio Injection
 					//Will not work if mTLS is set to STRICT on the namespace
-					.addToAnnotations("sidecar.istio.io/inject", "false")
+					//.addToAnnotations("sidecar.istio.io/inject", "false")
+					.addToAnnotations("sidecar.istio.io/rewriteAppHTTPProbers", "true")
 					.endMetadata();
 			
 		PodSpec podSpec = new PodSpec();
@@ -231,11 +232,9 @@ public class KubernetesBackend extends AbstractContainerBackend {
 		
 		Pod startupPod = doneablePod.withSpec(podSpec).done();
 		
-		log.info("Waiting for pod");
-		Retrying.retry(i -> Readiness.isReady(kubeClient.resource(startupPod).fromServer().get()), 60, 1000);
-		Pod pod = kubeClient.resource(startupPod).fromServer().get();
-		log.info("Finished waiting for pod");
+		
 		Service service = null;
+		Pod pod = null;
 		if (isUseInternalNetwork()) {
         
 			if(!isUseFQDNAddressing()){
@@ -274,12 +273,16 @@ public class KubernetesBackend extends AbstractContainerBackend {
 				service = kubeClient.resource(startupService).waitUntilReady(30, TimeUnit.SECONDS);
 				//service = kubeClient.services().inNamespace(kubeNamespace).withName("sp-service-" + container.getId()).get();
 				//log.info("Found Service:", service.getSpec().toString());
-				log.info("Found Service");
+				log.info("Found Service: " + service.getMetadata().getName());
 				//kubeClient.resource(startupPod).inNamespace(kubeNamespace).waitUntilReady(30, TimeUnit.SECONDS);
 				//pod = kubeClient.pods().inNamespace(kubeNamespace).withName(startupPod.getMetadata().getName()).fromServer().get();
 				//pod = kubeClient.pods().inNamespace(kubeNamespace).withName("sp-pod-" + container.getId()).waitUntilReady(30, TimeUnit.SECONDS);
 				//pod = kubeClient.pods().inNamespace(kubeNamespace).withName("sp-pod-" + container.getId()).get();
-				
+				log.info("Waiting for pod");
+				Retrying.retry(i -> Readiness.isReady(kubeClient.pods().inNamespace(kubeNamespace).withName("sp-pod-" + container.getId()).fromServer().get()), 60, 1000);
+				pod = kubeClient.pods().inNamespace(kubeNamespace).withName("sp-pod-" + container.getId()).fromServer().get();
+				log.info("Found Pod: " + pod.getMetadata().getName());
+				log.info("Finished waiting for pod");
 				// Workaround: waitUntilReady appears to be buggy.
 				log.info("Past waiting");
 			}
@@ -331,6 +334,7 @@ public class KubernetesBackend extends AbstractContainerBackend {
 			}
 			String mapping = mappingStrategy.createMapping(mappingKey, container, proxy);
 			URI target = calculateTarget(container, containerPort, servicePort);
+			log.info("Mapping: " + mapping);
 			proxy.getTargets().put(mapping, target);
 		}
 		
@@ -356,7 +360,7 @@ public class KubernetesBackend extends AbstractContainerBackend {
 			targetHostName = pod.getStatus().getHostIP();
 			targetPort = servicePort;
 		}
-		
+		log.info(String.format("%s://%s:%s", targetProtocol, targetHostName, targetPort));
 		return new URI(String.format("%s://%s:%s", targetProtocol, targetHostName, targetPort));
 	}
 	
